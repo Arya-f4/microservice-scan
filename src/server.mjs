@@ -4,7 +4,7 @@ import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import Queue from 'bull';
-import { redisConfig } from './config.js';  // Update the import
+import { redisConfig } from './config.js';
 
 // Create new queue with Bull and Redis
 const scanQueue = new Queue('scan', {
@@ -20,15 +20,32 @@ app.use(express.json());
 
 let cancelFlags = {}; // To keep track of job cancellation
 
-// API to start scan
-app.post('/scan', async (req, res) => {
+// API to start Nuclei scan
+app.post('/nuclei/scan', async (req, res) => {
   const url = req.body.url;
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
   }
 
   // Add job to queue
-  const job = await scanQueue.add({ url });
+  const job = await scanQueue.add({ url, type: 'nuclei' });
+
+  // Set up a cancellation flag
+  cancelFlags[job.id] = false;
+
+  // Return job ID as response
+  return res.json({ jobId: job.id });
+});
+
+// API to start WPScan
+app.post('/wpscan/scan', async (req, res) => {
+  const url = req.body.url;
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required' });
+  }
+
+  // Add job to queue
+  const job = await scanQueue.add({ url, type: 'wpscan' });
 
   // Set up a cancellation flag
   cancelFlags[job.id] = false;
@@ -78,16 +95,24 @@ scanQueue.process(async (job) => {
   if (currentConcurrentProcesses >= MAX_CONCURRENT_PROCESSES) {
     throw new Error('Too many concurrent processes');
   }
-  
+
   currentConcurrentProcesses++;
 
   try {
-    const { url } = job.data;
+    const { url, type } = job.data;
     const outputFile = path.resolve(`/app/output-${job.id}.txt`);
 
     return new Promise((resolve, reject) => {
-   
-const command = `nuclei -u ${url} -o ${outputFile} -t /root/nuclei-templates`;
+      let command;
+      if (type === 'nuclei') {
+        command = `nuclei -u ${url} -o ${outputFile} -t /root/nuclei-templates`;
+      } else if (type === 'wpscan') {
+        command = `wpscan --url ${url} --output ${outputFile}`;
+      } else {
+        return reject('Unknown scan type');
+      }
+      
+
       const process = exec(command);
 
       process.stdout.on('data', (data) => {
@@ -114,7 +139,7 @@ const command = `nuclei -u ${url} -o ${outputFile} -t /root/nuclei-templates`;
             resolve(data);
           });
         } else {
-          reject(`Nuclei process exited with code ${code}`);
+          reject(`${type} process exited with code ${code}`);
         }
       });
     });

@@ -27,6 +27,12 @@ RUN mkdir -p /root/nuclei-templates
 # Download and install Nuclei templates
 RUN nuclei -update-templates -t /root/nuclei-templates
 
+# Tambahkan Ruby
+RUN apt-get install -y ruby ruby-dev build-essential
+
+# Install wpscan
+RUN gem install wpscan
+
 # Set environment variable for Nuclei templates path
 ENV NUCLEI_TEMPLATES=/root/nuclei-templates
 
