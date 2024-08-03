@@ -2,13 +2,15 @@
   "name": "scan-app",
   "version": "1.0.0",
   "description": "Node.js app using Bull and Redis",
-  "main": "src/server.js",
+  "main": "src/server.mjs",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.mjs"
   },
   "dependencies": {
     "bull": "^4.0.0",
     "express": "^4.17.1",
+    "p-limit": "^5.0.0",
     "redis": "^4.3.1"
-  }
+  },
+  "type": "module"
 }

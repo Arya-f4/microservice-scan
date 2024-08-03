@@ -1,45 +1,43 @@
-const express = require('express');
-const { exec } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const Queue = require('bull');
-const pLimit = require('p-limit');
-const config = require('./config');
+// src/server.mjs
+import express from 'express';
+import { exec } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import Queue from 'bull';
+import { redisConfig } from './config.js';  // Update the import
 
-// Buat antrean baru dengan Bull dan Redis
+// Create new queue with Bull and Redis
 const scanQueue = new Queue('scan', {
-  redis: {
-    host: config.redis.host,
-    port: config.redis.port,
-  },
+  redis: redisConfig,
 });
 
-// Batasi jumlah concurrent processes menjadi 3
-const limit = pLimit(3);
+// Limit concurrent processes
+const MAX_CONCURRENT_PROCESSES = 3;
+let currentConcurrentProcesses = 0;
 
 const app = express();
 app.use(express.json());
 
 let cancelFlags = {}; // To keep track of job cancellation
 
-// API untuk mengirim permintaan scan
+// API to start scan
 app.post('/scan', async (req, res) => {
   const url = req.body.url;
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
   }
 
-  // Tambahkan job ke antrean
+  // Add job to queue
   const job = await scanQueue.add({ url });
 
   // Set up a cancellation flag
   cancelFlags[job.id] = false;
 
-  // Kembalikan ID job sebagai respons
+  // Return job ID as response
   return res.json({ jobId: job.id });
 });
 
-// API untuk mendapatkan hasil scan
+// API to get scan results
 app.get('/results/:jobId', async (req, res) => {
   const jobId = req.params.jobId;
   const job = await scanQueue.getJob(jobId);
@@ -48,7 +46,7 @@ app.get('/results/:jobId', async (req, res) => {
     return res.status(404).json({ error: 'Job not found' });
   }
 
-  // Cek status job dan kembalikan hasil jika selesai
+  // Check job state and return results if completed
   const state = await job.getState();
   if (state === 'completed') {
     return res.json({ results: job.returnvalue });
@@ -57,7 +55,7 @@ app.get('/results/:jobId', async (req, res) => {
   }
 });
 
-// API untuk membatalkan job
+// API to cancel job
 app.delete('/results/:jobId', async (req, res) => {
   const jobId = req.params.jobId;
   const job = await scanQueue.getJob(jobId);
@@ -75,20 +73,25 @@ app.delete('/results/:jobId', async (req, res) => {
   return res.json({ message: 'Job cancellation requested' });
 });
 
-// Proses pekerjaan dalam antrean dengan limitasi
+// Process jobs with concurrency control
 scanQueue.process(async (job) => {
-  const { url } = job.data;
-  const outputFile = path.resolve(`/app/output-${job.id}.txt`);
+  if (currentConcurrentProcesses >= MAX_CONCURRENT_PROCESSES) {
+    throw new Error('Too many concurrent processes');
+  }
+  
+  currentConcurrentProcesses++;
 
-  // Batasi jumlah concurrent processes
-  return limit(() => {
+  try {
+    const { url } = job.data;
+    const outputFile = path.resolve(`/app/output-${job.id}.txt`);
+
     return new Promise((resolve, reject) => {
-      const command = `nuclei -u ${url} -o ${outputFile} -t /path/to/templates`;
+   
+const command = `nuclei -u ${url} -o ${outputFile} -t /root/nuclei-templates`;
       const process = exec(command);
 
       process.stdout.on('data', (data) => {
         console.log(`stdout: ${data}`);
-        // Optionally, you can use this to update the job progress in Redis or another store
       });
 
       process.stderr.on('data', (data) => {
@@ -96,6 +99,8 @@ scanQueue.process(async (job) => {
       });
 
       process.on('close', (code) => {
+        currentConcurrentProcesses--;
+
         if (cancelFlags[job.id]) {
           return reject('Job canceled');
         }
@@ -113,10 +118,13 @@ scanQueue.process(async (job) => {
         }
       });
     });
-  });
+  } catch (error) {
+    currentConcurrentProcesses--;
+    throw error;
+  }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 9020;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
